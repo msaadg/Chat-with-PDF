@@ -1,0 +1,14 @@
+streamlit
+pypdf2
+spacy
+langchain
+langchain-openai
+langchain-huggingface
+python-dotenv
+faiss-cpu
+huggingface_hub
+sentence-transformers
+transformers
+torch
+accelerate
+bitsandbytes
