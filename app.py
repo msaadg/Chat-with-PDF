@@ -1,19 +1,17 @@
+# import spacy
+#from langchain_openai import OpenAI, OpenAIEmbeddings
+# from langchain.chat_models import ChatOpenAI
 import streamlit as st
+import torch
 from PyPDF2 import PdfReader
 from dotenv import load_dotenv
-# import spacy
-
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_openai import OpenAI, OpenAIEmbeddings
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
-# from langchain.chat_models import ChatOpenAI
 from langchain_huggingface import HuggingFacePipeline
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
-import torch
-
 from web_template import css, bot_template, user_template
 # nlp = spacy.load("en_core_web_sm")
 
@@ -124,8 +122,12 @@ def start_conversation(vector_embeddings):
 
 
 def process_query(query_text):
-    response = st.session_state.conversation({'question': query_text})
-    st.session_state.chat_history = response["chat_history"]
+    if st.session_state.conversation is None: # ask user to upload pdf files first and avoid an error
+        st.warning("Please upload and process the PDF files first.")
+        return
+    with st.spinner("Processing your query. This may take a moment..."):
+        response = st.session_state.conversation({'question': query_text})
+        st.session_state.chat_history = response["chat_history"]
 
     for i, message in enumerate(st.session_state.chat_history):
         if i%2 == 0:
@@ -144,14 +146,16 @@ def main():
     st.header("What can I help with?")
     query = st.text_input("Enter your query here")
 
-    if query:
-        process_query(query)
+    
 
     if "conversation" not in st.session_state:
         st.session_state.conversation = None
 
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = None
+
+    if query: #repositioned this block to ensure that the conversation object is properly initialized
+        process_query(query)
 
 
     with st.sidebar:

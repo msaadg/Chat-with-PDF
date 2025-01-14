@@ -2,7 +2,6 @@ streamlit
 pypdf2
 spacy
 langchain
-langchain-openai
 langchain-huggingface
 python-dotenv
 faiss-cpu
