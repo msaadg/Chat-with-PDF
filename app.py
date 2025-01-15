@@ -4,6 +4,7 @@
 import streamlit as st
 import torch
 from PyPDF2 import PdfReader
+from markitdown import MarkItDown
 from dotenv import load_dotenv
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -23,8 +24,16 @@ def get_pdf_content(documents):
         pdf_reader = PdfReader(document)
         for page in pdf_reader.pages:
             raw_text += page.extract_text()
-
     return raw_text
+
+def get_pdf_content(documents):
+    raw_text = ""
+    for document in documents:
+        pdf_reader = PdfReader(document)
+        for page in pdf_reader.pages:
+            raw_text += page.extract_text()
+    return raw_text
+
 
 
 def get_chunks(text, max_tokens=512):

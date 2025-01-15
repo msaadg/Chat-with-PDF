@@ -11,3 +11,4 @@ transformers
 torch
 accelerate
 bitsandbytes
+markitdown
