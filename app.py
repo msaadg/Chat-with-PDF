@@ -1,12 +1,10 @@
-# import spacy
-#from langchain_openai import OpenAI, OpenAIEmbeddings
-# from langchain.chat_models import ChatOpenAI
 import streamlit as st
 import torch
 from PyPDF2 import PdfReader
-from markitdown import MarkItDown
+from langchain_community.document_loaders import PyPDFLoader
 from dotenv import load_dotenv
 from langchain.text_splitter import CharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.memory import ConversationBufferMemory
@@ -14,90 +12,83 @@ from langchain.chains import ConversationalRetrievalChain
 from langchain_huggingface import HuggingFacePipeline
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
 from web_template import css, bot_template, user_template
-# nlp = spacy.load("en_core_web_sm")
-
-
-def get_pdf_content(documents):
-    raw_text = ""
-
-    for document in documents:
-        pdf_reader = PdfReader(document)
-        for page in pdf_reader.pages:
-            raw_text += page.extract_text()
-    return raw_text
-
-def get_pdf_content(documents):
-    raw_text = ""
-    for document in documents:
-        pdf_reader = PdfReader(document)
-        for page in pdf_reader.pages:
-            raw_text += page.extract_text()
-    return raw_text
+from langchain_community.vectorstores import FAISS
 
 
 
-def get_chunks(text, max_tokens=512):
-    text_splitter = CharacterTextSplitter(
-        separator="\n",
+def get_pdf_content(documents, method = 1):
+    if method == 1:
+        raw_text = ""
+        for document in documents:
+            pdf_reader = PdfReader(document)
+            for page in pdf_reader.pages:
+                raw_text += page.extract_text()
+        print(f"Extracted {len(raw_text)} characters from PDF")
+        return raw_text
+    if method == 2:
+        list_of_files = documents
+        list_of_docs = []
+        for file in list_of_files:
+            print(file)
+
+        loader = PyPDFLoader(file)
+        #     docs = loader.load()
+        #     list_of_docs.append(docs)
+        # print(f"Loaded {len(list_of_docs)} pages from PDF")
+        # return list_of_docs
+    
+
+
+def get_chunks(text, max_tokens=512, method = 1):
+    if method == 1:
+        text_splitter = CharacterTextSplitter(
+            separator="\n",
+            chunk_size=1000,
+            chunk_overlap=200,
+            length_function=len
+        )
+        text_chunks = text_splitter.split_text(text)
+        print(f"Split text into {len(text_chunks)} chunks")
+        return text_chunks
+    if method == 2:
+        text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=200,
-        length_function=len
-    )
-    text_chunks = text_splitter.split_text(text)
-    return text_chunks
-
-    # doc = nlp(text)
-    # sentences = [sent.text for sent in doc.sents]
+        length_function=len,
+        is_separator_regex=False,
+        )
+        text_chunks = text_splitter.create_documents(text)
+        print(f"Split text into {len(text_chunks)} chunks")
+        return text_chunks
+    else:
+        return "Invalid method"
     
-    # chunks = []
-    # current_chunk = ""
-    # current_length = 0
-    
-    # for sentence in sentences:
-    #     sentence_length = len(sentence.split())  # Approximate token count
-    #     if current_length + sentence_length > max_tokens:
-    #         if current_chunk:
-    #             chunks.append(current_chunk.strip())
-    #             current_chunk = sentence
-    #             current_length = sentence_length
-    #         else:
-    #             # Single sentence longer than max_tokens
-    #             chunks.append(sentence.strip())
-    #             current_chunk = ""
-    #             current_length = 0
-    #     else:
-    #         current_chunk += " " + sentence
-    #         current_length += sentence_length
-    
-    # if current_chunk:
-    #     chunks.append(current_chunk.strip())
-    
-    # return chunks
-
-
-def get_embeddings(chunks):
-    embeddings = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2"
-    )
-    vector_storage = FAISS.from_texts(texts=chunks, embedding=embeddings)
-    return vector_storage
+def get_embeddings(chunks, method = 1):
+    if method == 1:
+        embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-MiniLM-L6-v2"
+        )
+        vector_storage = FAISS.from_texts(texts=chunks, embedding=embeddings)
+        return vector_storage
+    if method == 2:
+        embeddings = HuggingFaceEmbeddings(
+            model_name="sentence-transformers/all-mpnet-base-v2"
+        )
+        vector_store = FAISS(embedding_function=embeddings)
+        ids = vector_store.add_documents(documents=chunks)
+        return vector_store
 
 
 def initialize_local_llm():
-    # Initialize TinyLlama model
+
     model_id = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    # Configure quantization
-    # quantization_config = BitsAndBytesConfig(
-    #     load_in_8bit=True,
-    #     bnb_8bit_compute_dtype=torch.float16
-    # )
+    
     
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         torch_dtype=torch.float16,
         device_map="auto",
-        # quantization_config=quantization_config  # Use the new config instead of load_in_8bit
     )
     
     pipe = pipeline(
@@ -114,20 +105,26 @@ def initialize_local_llm():
     local_llm = HuggingFacePipeline(pipeline=pipe)
     return local_llm
 
-def start_conversation(vector_embeddings):
-    # llm = ChatOpenAI()
+def start_conversation(vector_embeddings, method = 1):
     llm = initialize_local_llm()
     memory = ConversationBufferMemory(
         memory_key='chat_history',
         return_messages=True
     )
-    conversation = ConversationalRetrievalChain.from_llm(
-        llm=llm,
-        retriever=vector_embeddings.as_retriever(),
-        memory=memory
-    )
-
+    if method == 1:
+        conversation = ConversationalRetrievalChain.from_llm(
+            llm=llm,
+            retriever=vector_embeddings.as_retriever(),
+            memory=memory
+        )
+    if method == 2:
+        conversation = ConversationalRetrievalChain.from_llm(
+            llm=llm,
+            retriever=vector_embeddings.as_retriever( search_type="similarity", search_kwargs={"k": 1},),
+            memory=memory
+        )
     return conversation
+    
 
 
 def process_query(query_text):
@@ -175,13 +172,13 @@ def main():
         if st.button("Run"):
             with st.spinner("Processing..."):
                 # extract text from pdf documents
-                extracted_text = get_pdf_content(documents)
-                # convert text to chunks of data
-                text_chunks = get_chunks(extracted_text)
-                # create vector embeddings
-                vector_embeddings = get_embeddings(text_chunks)
-                # create conversation
-                st.session_state.conversation = start_conversation(vector_embeddings)
+                extracted_text = get_pdf_content(documents, 2)
+                # # convert text to chunks of data
+                # text_chunks = get_chunks(extracted_text, 1)
+                # # create vector embeddings
+                # vector_embeddings = get_embeddings(text_chunks, 1)
+                # # create conversation
+                # st.session_state.conversation = start_conversation(vector_embeddings, 1)
 
 
 if __name__ == "__main__":

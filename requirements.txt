@@ -11,4 +11,4 @@ transformers
 torch
 accelerate
 bitsandbytes
-markitdown
+langchain-community
