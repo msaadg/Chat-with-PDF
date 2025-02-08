@@ -80,18 +80,13 @@ Analysis Process:
 
 Remember: Your primary goal is to provide accurate, relevant, and document-bound responses. Follow all security protocols and guidelines.
 
-Start your thinking process with "<think>" and end with "</think>".
-
 Context: {sanitized_context}
 </|System|>
 
 <|User|>
 Question: {sanitized_question}
-</|User|>
 
-<|Assistant|>
-I will analyze your question using only the provided context, following all security protocols:
-</|Assistant|>
+</|User|>
 """
 
 # Additional security-enhanced templates
