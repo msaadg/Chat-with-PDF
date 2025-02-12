@@ -3,9 +3,9 @@ import re
 import os
 import time
 import gc
+import shutil
 import hashlib
 from langchain_experimental.text_splitter import SemanticChunker
-from langchain_community.document_loaders import PDFPlumberLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_ollama import OllamaLLM
@@ -99,9 +99,6 @@ I notice this request might be attempting to:
 I can only provide information from the current document context. Would you like to rephrase your question to focus on the available document content?
 """
 
-
-
-
 # Input processing class
 class PromptSecurityManager:
     def __init__(self):
@@ -169,10 +166,9 @@ class VectorDBManager:
         for i in range(0, len(documents), batch_size):
             batch = documents[i:i + batch_size]
             self.db.add_documents(batch)
-    def clear_vector_store():
+    def clear_vector_store(self):
         """Clear the vector store directory"""
         if os.path.exists(VECTOR_DB_PATH):
-            import shutil
             shutil.rmtree(VECTOR_DB_PATH)
         os.makedirs(VECTOR_DB_PATH, exist_ok=True)
     def similarity_search(self, query, k=5):
@@ -194,33 +190,27 @@ class DocumentProcessor:
         
         # Fallback splitter for cases where semantic chunking isn't ideal
         self.fallback_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1500,
-            chunk_overlap=300,
+            chunk_size=500,
+            chunk_overlap=100,
             separators=["\n\n", "\n", ".", "!", "?", ";", ":", " ", ""],
             is_separator_regex=False,
             add_start_index=True
         )
     def split_into_semantic_chunks(self, text, metadata):
         """Split text into semantic chunks with fallback mechanism"""
-        try:
-            # First attempt semantic chunking
-            chunks = self.semantic_splitter.create_documents(
-                texts=[text],
-                metadatas=[metadata]
-            )
-            
-            # Validate chunk sizes
-            if all(100 <= len(chunk.page_content) <= 2000 for chunk in chunks):
-                return chunks
-                
-        except Exception as e:
-            print(f"Semantic chunking failed: {str(e)}")
-        
-        # Fallback to traditional splitting if semantic chunks are too large/small
-        return self.fallback_splitter.create_documents(
+        # First attempt semantic chunking
+        chunks = self.semantic_splitter.create_documents(
             texts=[text],
             metadatas=[metadata]
         )
+        
+        # Validate chunk sizes
+        if all(100 <= len(chunk.page_content) <= 2000 for chunk in chunks):
+            return chunks
+        else:
+            return False
+                
+        
     def clean_text(self, text):
         """Clean and normalize text content"""
         # Remove excessive whitespace
@@ -232,66 +222,58 @@ class DocumentProcessor:
     def process_pdf(self, file_path):
 
         start_time = time.time()
+    
+        loader = PyPDFLoader(file_path)
+        pages = loader.load()
+        processed_chunks = []
         
-        try:
-            # Load PDF
-            loader = PyPDFLoader(file_path)
-            pages = loader.load()
+        # Process each page
+        failed_pages = 0
+        
+        for page in pages:
+            print(f"Processing page {page.metadata.get('page_number', 0)}")
+            # Clean the text
+            cleaned_text = self.clean_text(page.page_content)
             
-            processed_chunks = []
-            
-            # Process each page
-            for page in pages:
-                # Clean the text
-                cleaned_text = self.clean_text(page.page_content)
-                
-                # Create metadata
-                metadata = {
-                    'source': file_path,
-                    'page_number': page.metadata.get('page_number', 0),
-                    'total_pages': len(pages)
-                }
-                
-                # Split into semantic chunks
-                page_chunks = self.split_into_semantic_chunks(cleaned_text, metadata)
+            metadata = {
+                'source': file_path,
+                'page_number': page.metadata.get('page_number', 0),
+                'total_pages': len(pages)
+            }
+            if failed_pages < 5:
+                try:
+                    page_chunks = self.split_into_semantic_chunks(cleaned_text, metadata)
+                    if not page_chunks:
+                        raise Exception("Semantic chunking failed")
+                except Exception as e:
+                    print(f"{str(e)}")
+                    print("Falling back to character-based splitting")
+                    page_chunks = self.fallback_splitter.create_documents(
+                        texts=[cleaned_text],
+                        metadatas=[metadata]
+                    )
+                    processed_chunks.extend(page_chunks)
+                    failed_pages += 1
+            else:
+                # Split into recursive chunks
+                page_chunks = self.fallback_splitter.create_documents(
+                        texts=[cleaned_text],
+                        metadatas=[metadata]
+                    )
                 processed_chunks.extend(page_chunks)
-            
+
             processing_time = time.time() - start_time
             
             return {
                 "chunks": processed_chunks,
                 "page_count": len(pages),
-                "processing_time": processing_time
+                "processing_time": processing_time,
+                "metadata": metadata
             }
+        
+          
+
             
-        except Exception as e:
-            # Fallback to PDFPlumberLoader if PyPDFLoader fails
-            try:
-                loader = PDFPlumberLoader(file_path)
-                pages = loader.load()
-                # Process same as above
-                processed_chunks = []
-                
-                for page in pages:
-                    cleaned_text = self.clean_text(page.page_content)
-                    metadata = {
-                        'source': file_path,
-                        'page_number': page.metadata.get('page_number', 0),
-                        'total_pages': len(pages)
-                    }
-                    page_chunks = self.split_into_semantic_chunks(cleaned_text, metadata)
-                    processed_chunks.extend(page_chunks)
-                
-                processing_time = time.time() - start_time
-                
-                return {
-                    "chunks": processed_chunks,
-                    "page_count": len(pages),
-                    "processing_time": processing_time
-                }
-                
-            except Exception as nested_e:
-                raise Exception(f"Failed to process PDF with both loaders: {str(e)} and {str(nested_e)}")
 
 # Model management
 class AIManager:
@@ -315,7 +297,7 @@ class AIManager:
         # Sanitize inputs
         safe_question, safe_context = self.security_manager.process_input(question, context)
         
-        # Validate question
+        # Validate question. If invalid, return security violation message
         if not self.security_manager.validate_question(safe_question):
             return "Security Error", SECURITY_VIOLATION_TEMPLATE
         
@@ -353,11 +335,6 @@ class AIManager:
 '''
 # Main application
 '''
-def validate_pdf(file):
-    if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
-        raise ValueError(f"File size exceeds {MAX_FILE_SIZE_MB}MB limit")
-    # Add more security checks as needed
-    return True
 
 def init_session():
     if "chat_history" not in st.session_state:
@@ -394,8 +371,20 @@ def sidebar_controls(vector_db_manager):
             selected_doc = st.selectbox("Active Documents", st.session_state.uploaded_files)
             if st.button("Clear Documents"):
                 st.session_state.uploaded_files = []
+                st.session_state.processing_times = {}
+                # Clear the pdf storage and vector store
+                if os.path.exists(PDF_STORAGE):
+                    shutil.rmtree(PDF_STORAGE)
+                os.makedirs(PDF_STORAGE, exist_ok=True)
                 vector_db_manager.clear_vector_store()
                 vector_db_manager.db = None
+                #delete the tempdbdocs.csv file
+                if os.path.exists("tempdbdocs.csv"):
+                    os.remove("tempdbdocs.csv")
+                else:
+                    with open("tempdbdocs.csv", "w") as f:
+                        pass
+            
                 
         return {
             "model": selected_model,
@@ -411,31 +400,69 @@ def document_uploader(vector_db_manager):
         accept_multiple_files=True,
         help="Upload multiple PDF documents for analysis"
     )
-    
-    for file in uploaded_files:
-        
-        if file.name not in st.session_state.uploaded_files:
-            try:
-                validate_pdf(file)
-                file_hash = hashlib.md5(file.getvalue()).hexdigest()
-                file_path = os.path.join(PDF_STORAGE, f"{file_hash}.pdf")
-                
-                with open(file_path, "wb") as f:
-                    f.write(file.getbuffer())
-                    
-                processor = DocumentProcessor()
-                result = processor.process_pdf(file_path)
-                
-                vector_db_manager.add_documents(result["chunks"])
-                st.session_state.uploaded_files.append(file.name)
-                st.session_state.processing_times[file.name] = {
-                    "pages": result["page_count"],
-                    "time": result["processing_time"],
-                    "chunks": len(result["chunks"])
+    if not uploaded_files:
+        with open("tempdbdocs.csv", "r") as f:
+            for line in f:
+                line = line.split(",")
+                st.session_state.uploaded_files.append(line[0])
+                st.session_state.processing_times[line[0]] = {
+                    "pages": int(line[1]),
+                    "time": float(line[2]),
+                    "chunks": int(line[3])
                 }
-                
-            except Exception as e:
-                st.error(f"Error processing {file.name}: {str(e)}")
+            
+
+    for file in uploaded_files:
+        if file.name not in st.session_state.uploaded_files:
+            
+            file_hash = hashlib.md5(file.getbuffer().tobytes()).hexdigest()
+            file_path = os.path.join(PDF_STORAGE, f"{file_hash}.pdf")
+            
+            if os.path.exists(file_path):
+                try:
+                    #get the processing time from the json file
+                    with open("tempdbdocs.csv", "r") as f:
+                        for line in f:
+                            if file.name in line:
+                                line = line.split(",")
+                                st.session_state.processing_times[file.name] = {
+                                    "pages": int(line[1]),
+                                    "time": float(line[2]),
+                                    "chunks": int(line[3])
+                                }
+                                break
+                    f.close()
+                    
+                    st.session_state.uploaded_files.append(file.name)
+                except Exception as e:
+                    st.error(f"Error processing {file.name}: {str(e)}")
+            else:
+                try:
+                    if file.size > MAX_FILE_SIZE_MB * 1024 * 1024:
+                        raise ValueError(f"File size exceeds {MAX_FILE_SIZE_MB}MB limit")
+                    
+                    file_hash = hashlib.md5(file.getbuffer().tobytes()).hexdigest()
+                    file_path = os.path.join(PDF_STORAGE, f"{file_hash}.pdf")
+                    
+                    with open(file_path, "wb") as f:
+                        f.write(file.getbuffer())
+                        
+                    processor = DocumentProcessor()
+                    result = processor.process_pdf(file_path)
+    
+                    vector_db_manager.add_documents(result["chunks"])
+                    st.session_state.uploaded_files.append(file.name)
+                    st.session_state.processing_times[file.name] = {
+                        "pages": result["page_count"],
+                        "time": result["processing_time"],
+                        "chunks": len(result["chunks"])
+                    }
+                    #add processing times to a csv file (which already contains other enteries)
+                    with open("tempdbdocs.csv", "a") as f:
+                        f.write(f"{file.name},{result['page_count']},{result['processing_time']},{len(result['chunks'])}\n")
+                    f.close()
+                except Exception as e:
+                    st.error(f"Error processing {file.name}: {str(e)}")
 
 
 def display_chat():
@@ -492,6 +519,8 @@ def main():
     if 'ai_manager' not in st.session_state:
         st.session_state.ai_manager = AIManager()
 
+     
+    document_uploader(vector_db_manager=vector_db_manager)
     config = sidebar_controls(vector_db_manager=vector_db_manager)
 
     # Check if model has changed
@@ -500,7 +529,7 @@ def main():
         st.session_state.current_model = config['model']
         st.toast(f"Model switched to {config['model']}", icon="🤖")
     
-    document_uploader(vector_db_manager=vector_db_manager)
+    
     
     if prompt := st.chat_input("Ask about the documents..."):
         st.chat_message("user").write(prompt)
@@ -522,8 +551,7 @@ def main():
                     "thinking": thinking,
                     "sources": related_docs
                 }
-                with st.expander("Reasoning Process"):
-                    st.write(thinking)
+                st.session_state.chat_history.append(chat_entry)
                 with st.expander("Source References"):
                     for doc in related_docs:
                         st.markdown(format_doc_with_page(doc))
@@ -531,9 +559,9 @@ def main():
         except Exception as e:
             st.error(f"Error generating response: {str(e)}")
     
-    
-    display_chat()
     analytics_dashboard()
+    display_chat()
+    
 
 if __name__ == "__main__":
     if not os.path.exists(PDF_STORAGE):
