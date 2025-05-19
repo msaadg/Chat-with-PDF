@@ -1,6 +1,5 @@
 streamlit
 langchain_core
-langchain_experimental
 langchain_community
 langchain_ollama
 pdfplumber
